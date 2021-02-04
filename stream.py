@@ -6,6 +6,7 @@ import time
 import pymongo
 import logging
 import multiprocessing
+import queue
 
 from multiprocessing import Manager
 from moonwrapper import gather_account_id, gather_acct_instruments, MoonQueue
@@ -15,6 +16,8 @@ STREAM_URL = 'https://stream-fxpractice.oanda.com/'
 MAX_QUEUE_LENGTH = 30
 MAX_RECORDING_PROCESSES = 10
 RESTART_INTERVAL = 5*60
+PROC_MANAGEMENT_INTERVAL = 1
+
 
 def dispatch_processes(token, instruments):
     while True:
@@ -45,6 +48,10 @@ def dispatch_processes(token, instruments):
 
 
 def stat_keeper(tq):
+    logging.info('Monitoring network performance...')
+
+    max_speed = 0
+    min_speed = 99999999
     while True:
         time.sleep(10)
         min_time = time.time()-10
@@ -53,14 +60,16 @@ def stat_keeper(tq):
                 tq.pop(i)
 
         avg = len(tq)/10
+        max_speed = avg if avg > max_speed else max_speed
+        min_speed = avg if avg < min_speed else min_speed
 
-        logging.info(f'Average data speed: {avg}pt/s ({(avg*300)/1000:0.2f}kb/s)')
+        logging.info(f'Avg data speed: {avg}pt/s ({(avg*300)/1000:0.2f}KB/s)'
+                     f' Max data speed: {max_speed}pt/s ({(max_speed*300)/1000:0.2f}KB/s)'
+                     f' Min data speed: {min_speed}pt/s ({(min_speed*300)/1000:0.2f}KB/s)')
 
 
 def monitor_queue(q: MoonQueue, recording_processes):
-    tick_count = 0
     while True:
-        tick_count += 1
         # Monitor queue size and adjust recording pool accordingly
         s = q.qsize()
         if s > MAX_QUEUE_LENGTH:
@@ -73,9 +82,7 @@ def monitor_queue(q: MoonQueue, recording_processes):
                 recording_processes.append(p)
                 logging.warning(f'Spawned new data recording process. Process count: {len(recording_processes)}')
 
-        if tick_count % 1000 == 0:  # Don't want to do this too often
-            if len(recording_processes) >= MAX_RECORDING_PROCESSES:
-                logging.debug(f'Tick count: {tick_count}')
+            elif len(recording_processes) == MAX_RECORDING_PROCESSES:
                 # Replace oldest process in case recording is broken for some reason
                 p = multiprocessing.Process(target=record_data, args=(q,))
                 p.start()
@@ -84,11 +91,15 @@ def monitor_queue(q: MoonQueue, recording_processes):
                 recording_processes.pop(0).terminate()
                 logging.warning(f'Already at max processes, recycling a process. Process count: {len(recording_processes)}')
 
-
+            else:
+                recording_processes.pop(0).terminate()
+                logging.warning(f'Max processes exceeded, terminating a process. Process count: {len(recording_processes)}')
 
         if s < MAX_QUEUE_LENGTH and len(recording_processes) > 1:
             recording_processes.pop(0).terminate()
             logging.warning(f'Killed data recording process. Process count: {len(recording_processes)}')
+
+        time.sleep(PROC_MANAGEMENT_INTERVAL)
 
 
 def record_data(q: MoonQueue):
@@ -99,12 +110,15 @@ def record_data(q: MoonQueue):
     collection = crystalmoondb['raw']
 
     while True:
+        logging.debug('Pulling data from queue...')
         try:
-            data_point = q.get()
+            data_point = q.get(timeout=1)
+            logging.debug('Inserting data into database...')
             collection.insert_one(data_point)
+            logging.debug('Data recorded.')
 
-        except Exception as e:
-            logging.error(f'Data recording failed. Reason: {e}')
+        except queue.Empty:
+            logging.debug('Queue appears to be empty')
 
 
 def stream_prices(token,  instruments, q: MoonQueue, tq: list):
@@ -153,13 +167,13 @@ if __name__ == '__main__':
         STREAM_URL = config['primary']['STREAM_URL']
 
     if config.has_option('primary', 'MAX_QUEUE_LENGTH'):
-        MAX_QUEUE_LENGTH = config['primary']['MAX_QUEUE_LENGTH']
+        MAX_QUEUE_LENGTH = int(config['primary']['MAX_QUEUE_LENGTH'])
 
     if config.has_option('primary', 'MAX_RECORDING_PROCESSES'):
-        MAX_RECORDING_PROCESSES = config['primary']['MAX_RECORDING_PROCESSES']
+        MAX_RECORDING_PROCESSES = int(config['primary']['MAX_RECORDING_PROCESSES'])
 
     if config.has_option('primary', 'RESTART_INTERVAL'):
-        RESTART_INTERVAL = config['primary']['RESTART_INTERVAL']
+        RESTART_INTERVAL = int(config['primary']['RESTART_INTERVAL'])
 
     instruments = gather_acct_instruments(id, token)
 
