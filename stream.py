@@ -132,7 +132,8 @@ def stream_prices(token,  instruments, q: MoonQueue, tq: list):
 
 if __name__ == '__main__':
     # Configure logging
-    logging.basicConfig(filename='logs/streaming.log', format='%(levelname)s:%(message)s', level=logging.DEBUG)
+    log = f'logs/{time.strftime("%Y%m%d-%H%M%S")}-streaming.log'
+    logging.basicConfig(filename=log, format='%(levelname)s:%(message)s', level=logging.DEBUG)
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.INFO)
     formatter = logging.Formatter('[%(asctime)s][%(levelname)s]: %(message)s', "%Y-%m-%d %H:%M:%S")
