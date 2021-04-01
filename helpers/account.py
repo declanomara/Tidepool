@@ -17,11 +17,16 @@ def gather_account_id(alias, token, live=False):
 
     for account in r.json()['accounts']:
         r = requests.get(f'{endpoint}/{account["id"]}', headers=headers)
-        if r.json()['account']['alias'] != alias:
-            continue
 
-        else:
-            return r.json()["account"]["id"]
+        try:
+            if r.json()['account']['alias'] != alias:
+                continue
+
+            else:
+                return r.json()["account"]["id"]
+
+        except:
+            print(r.json())
 
     return False
 

@@ -9,7 +9,7 @@ import multiprocessing
 import queue
 
 from multiprocessing import Manager
-from moonwrapper import gather_account_id, gather_acct_instruments, MoonQueue
+from helpers import gather_account_id, gather_acct_instruments, MoonQueue
 
 
 STREAM_URL = 'https://stream-fxpractice.oanda.com/'
@@ -34,7 +34,7 @@ def dispatch_processes(token, instruments):
         for p in [*recording_processes, gathering_process, monitoring_process, stats_process]:
             p.start()
 
-        time.sleep(RESTART_INTERVAL) # Restart script every 5 hours
+        time.sleep(RESTART_INTERVAL) # Restart script every 5 hours :)
 
         logging.info('Restarting script...')
 
