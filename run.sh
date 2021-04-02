@@ -14,4 +14,4 @@ screen -dm -S 'dataprocessing' bash -c 'python3 process.py; exec bash'
 echo "Starting data streaming script"
 screen -dmS 'streaming' bash -c 'python3 stream.py; exec bash'
 
-echo "Successfully started data collection"
+echo "Successfully started data collection systems"
