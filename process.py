@@ -29,6 +29,8 @@ if __name__ == '__main__':
     tidepooldb = client['tidepool']
 
     with tidepooldb['raw'].watch([{'$match': {'operationType': 'insert'}}]) as stream:
+        total = 0
+
         for insert_change in stream:
             raw_data = insert_change['fullDocument']
             if raw_data['type'] != 'PRICE':
@@ -43,5 +45,9 @@ if __name__ == '__main__':
             }
 
             tidepooldb[instrument].insert_one(data)
+            total += 1
             logging.debug(f'{instrument} data point processed')
+
+            if total%100 == 0:
+                logging.info(f'Process {total} data points')
 
