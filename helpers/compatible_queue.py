@@ -34,7 +34,7 @@ class SharedCounter(object):
         return self.count.value
 
 
-class MoonQueue(Queue):
+class CompatibleQueue(Queue):
     """ A portable implementation of multiprocessing.Queue.
     Because of multithreading / multiprocessing semantics, Queue.qsize() may
     raise the NotImplementedError exception on Unix platforms like Mac OS X

@@ -41,4 +41,8 @@ def gather_acct_instruments(id, token, live=False):
     headers = {'Authorization': f'Bearer {token}'}
 
     r = requests.get(endpoint, headers=headers)
+
+    if 'errorMessage' in r.json():
+        return False
+
     return [instrument['name'] for instrument in r.json()['instruments']]

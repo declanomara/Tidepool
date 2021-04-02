@@ -8,8 +8,9 @@ import logging
 import multiprocessing
 import queue
 
+from pathlib import Path
 from multiprocessing import Manager
-from helpers import gather_account_id, gather_acct_instruments, MoonQueue
+from helpers import gather_account_id, gather_acct_instruments, CompatibleQueue
 
 
 STREAM_URL = 'https://stream-fxpractice.oanda.com/'
@@ -19,16 +20,16 @@ RESTART_INTERVAL = 5*60
 PROC_MANAGEMENT_INTERVAL = 1
 
 
-def dispatch_processes(token, instruments):
+def dispatch_processes(token, instruments, db):
     while True:
         m = Manager()
-        q = MoonQueue()
+        q = CompatibleQueue()
         tq = m.list()
         recording_processes = list()
-        recording_processes.append(multiprocessing.Process(target=record_data, args=(q,)))
+        recording_processes.append(multiprocessing.Process(target=record_data, args=(db, q,)))
 
         gathering_process = multiprocessing.Process(target=stream_prices, args=(token, instruments, q, tq))
-        monitoring_process = multiprocessing.Process(target=monitor_queue, args=(q, recording_processes))
+        monitoring_process = multiprocessing.Process(target=monitor_queue, args=(q, recording_processes, db))
         stats_process = multiprocessing.Process(target=stat_keeper, args=(tq,))
 
         for p in [*recording_processes, gathering_process, monitoring_process, stats_process]:
@@ -68,7 +69,7 @@ def stat_keeper(tq):
                      f' Min data speed: {min_speed}pt/s ({(min_speed*300)/1000:0.2f}KB/s)')
 
 
-def monitor_queue(q: MoonQueue, recording_processes):
+def monitor_queue(q: CompatibleQueue, recording_processes, db):
     while True:
         # Monitor queue size and adjust recording pool accordingly
         s = q.qsize()
@@ -77,14 +78,14 @@ def monitor_queue(q: MoonQueue, recording_processes):
 
             if len(recording_processes) < MAX_RECORDING_PROCESSES:
                 # Spawn new process to handle excess load
-                p = multiprocessing.Process(target=record_data, args=(q,))
+                p = multiprocessing.Process(target=record_data, args=(db, q,))
                 p.start()
                 recording_processes.append(p)
                 logging.warning(f'Spawned new data recording process. Process count: {len(recording_processes)}')
 
             elif len(recording_processes) == MAX_RECORDING_PROCESSES:
                 # Replace oldest process in case recording is broken for some reason
-                p = multiprocessing.Process(target=record_data, args=(q,))
+                p = multiprocessing.Process(target=record_data, args=(db, q,))
                 p.start()
                 recording_processes.append(p)
 
@@ -102,12 +103,12 @@ def monitor_queue(q: MoonQueue, recording_processes):
         time.sleep(PROC_MANAGEMENT_INTERVAL)
 
 
-def record_data(q: MoonQueue):
+def record_data(db: str, q: CompatibleQueue):
     # Configure DB
-    client = pymongo.MongoClient("mongodb://localhost:27017/")
+    client = pymongo.MongoClient(db)
     logging.info('Connection to database established')
-    crystalmoondb = client['crystalmoon']
-    collection = crystalmoondb['raw']
+    tidepooldb = client['tidepool']
+    collection = tidepooldb['raw']
 
     while True:
         logging.debug('Pulling data from queue...')
@@ -121,7 +122,7 @@ def record_data(q: MoonQueue):
             logging.debug('Queue appears to be empty')
 
 
-def stream_prices(token,  instruments, q: MoonQueue, tq: list):
+def stream_prices(token, instruments, q: CompatibleQueue, tq: list):
     headers = {'Authorization': f'Bearer {token}'}
     url = f'{STREAM_URL}/v3/accounts/{id}/pricing/stream?instruments={"".join([instrument + "," for instrument in instruments])}'
 
@@ -146,6 +147,7 @@ def stream_prices(token,  instruments, q: MoonQueue, tq: list):
 
 if __name__ == '__main__':
     # Configure logging
+    Path('logs').mkdir(exist_ok=True)
     log = f'logs/{time.strftime("%Y%m%d-%H%M%S")}-streaming.log'
     logging.basicConfig(filename=log, format='%(levelname)s:%(message)s', level=logging.DEBUG)
     handler = logging.StreamHandler(sys.stdout)
@@ -159,8 +161,12 @@ if __name__ == '__main__':
     config = configparser.ConfigParser()
     config.read('streamconfig.ini')
     token = config['primary']['API_TOKEN']
-    alias = 'crystalmoon'  # Main account for trading
-    id = gather_account_id(alias, token)
+    alias = 'tidepool'  # Main account for trading
+    id = gather_account_id(alias, token)  # No longer able to gather dynamically
+
+    if not id:
+        logging.error('Unable to locate account ID')
+        quit(1)
 
     # Configure global vars
     if config.has_option('primary', 'STREAM_URL'):
@@ -177,9 +183,16 @@ if __name__ == '__main__':
 
     instruments = gather_acct_instruments(id, token)
 
+    if not instruments:
+        logging.error('Error gathering instruments, possibly invalid account ID')
+        quit(1)
+
+    # Configure DB
+    db = config['primary']['DB_URL']
+
     logging.info('Dispatching processes to begin data collection...')
     try:
-        dispatch_processes(token, instruments)
+        dispatch_processes(token, instruments, db)
 
     except KeyboardInterrupt:
         logging.ERROR('KeyboardInterrupt detecting, quitting program.')
