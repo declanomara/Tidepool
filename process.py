@@ -49,5 +49,5 @@ if __name__ == '__main__':
             logging.debug(f'{instrument} data point processed')
 
             if total%100 == 0:
-                logging.info(f'Process {total} data points')
+                logging.info(f'Processed {total} data points')
 
