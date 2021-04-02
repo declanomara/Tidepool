@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+echo "Killing old screens..."
+screen -XS dataprocessing kill
+screen -XS streaming kill
+
 echo "Starting data processing listener..."
 screen -dmS 'dataprocessing' bash -c 'python3 processing.py'
 
