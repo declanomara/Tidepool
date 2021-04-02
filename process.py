@@ -1,13 +1,10 @@
-from pathlib import Path
-from pymongo import errors
-from datetime import datetime, timedelta
-
 import time
 import dateutil.parser as dp
 import logging
 import sys
 import pymongo
-import json
+
+from pathlib import Path
 
 
 def ISO8601_to_epoch(timestamp: str):
@@ -26,7 +23,7 @@ if __name__ == '__main__':
     logging.getLogger().addHandler(handler)
 
     # Fun stuff
-    db = 'mongodb://localhost:27017/'
+    db = 'mongodb://3.22.74.49:27017/'
     client = pymongo.MongoClient(db)
     logging.info('Connection to database established')
     tidepooldb = client['tidepool']
@@ -48,12 +45,3 @@ if __name__ == '__main__':
             tidepooldb[instrument].insert_one(data)
             logging.debug(f'{instrument} data point processed')
 
-    # try:
-    #     with tidepooldb['raw'].watch([{'$match': {'operationType': 'insert'}}]) as stream:
-    #         for insert_change in stream:
-    #             print(insert_change)
-    #
-    # except pymongo.errors.PyMongoError as e:
-    #     # The ChangeStream encountered an unrecoverable error or the
-    #     # resume attempt failed to recreate the cursor.
-    #     logging.error('...')
