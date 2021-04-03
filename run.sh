@@ -5,7 +5,7 @@ parent_path=$( cd "$(dirname "${BASH_SOURCE[0]}")" ; pwd -P )
 cd "$parent_path"
 
 echo  "Checking for dependencies..."
-pip3 install -r -u requirements.txt
+pip3 install -r requirements.txt -u
 
 echo "Killing old screens..."
 screen -XS streaming kill
