@@ -159,7 +159,7 @@ if __name__ == '__main__':
     # Configure API
     logging.debug('Configuring API...')
     config = configparser.ConfigParser()
-    config.read('streamconfig.ini')
+    config.read('config.ini')
     token = config['primary']['API_TOKEN']
     alias = 'tidepool'  # Main account for trading
     id = gather_account_id(alias, token)  # No longer able to gather dynamically

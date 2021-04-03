@@ -1,4 +1,5 @@
 import time
+import configparser
 import dateutil.parser as dp
 import logging
 import sys
@@ -22,8 +23,12 @@ if __name__ == '__main__':
     handler.setFormatter(formatter)
     logging.getLogger().addHandler(handler)
 
-    # Fun stuff
-    db = 'mongodb://3.22.74.49:27017/'
+    # Setup config
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+    db = config['primary']['DB_URL']
+
+    # Listen for data
     client = pymongo.MongoClient(db)
     logging.info('Connection to database established')
     tidepooldb = client['tidepool']
