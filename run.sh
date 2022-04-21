@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Kill any old screens
 killall screen
 sleep 1
