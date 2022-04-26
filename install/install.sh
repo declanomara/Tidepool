@@ -3,6 +3,7 @@
 sudo pip3 install -r requirements.txt
 
 sudo cp install/services/*.service /lib/systemd/system/
+mkdir /usr/share/Tidepool
 sudo cp -r * /usr/share/Tidepool/
 
 
