@@ -8,5 +8,9 @@ sudo cp -r * /usr/share/Tidepool/
 
 
 sudo systemctl daemon-reload
+
+sudo systemctl restart datagatherer.service
+sudo systemctl restart datamonitor.service
+
 sudo systemctl enable datagatherer.service
 sudo systemctl enable datamonitor.service

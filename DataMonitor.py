@@ -70,7 +70,11 @@ class DataMonitor:
         historical = self.stats_db['historical']
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         for key, value in profile.items():
-            stats = {'type': 'data_speed', 'instrument': key, 'data_rate': value, 'timestamp': timestamp}
+            stats = {'type': 'data_speed',
+                     'instrument': key,
+                     'data_rate': value,
+                     'count': self.data_count(key),
+                     'timestamp': timestamp}
             latest.update_one({'instrument': key}, {'$set': stats}, upsert=True)
             historical.insert_one(stats)
 
