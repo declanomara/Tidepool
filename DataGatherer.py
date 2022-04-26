@@ -2,6 +2,7 @@ import sys
 import time
 import pymongo
 import queue
+from dateutil import parser
 from helpers import OANDA, load_config, seconds_to_human
 from multiprocessing import Process, Manager
 
@@ -74,7 +75,7 @@ class DataGatherer:
     @staticmethod
     def process_datapoint(datapoint):
         processed_datapoint = {
-            "time": datapoint["time"],
+            "time": parser.parse(datapoint["time"]),
             "bid": datapoint["closeoutBid"],
             "ask": datapoint["closeoutAsk"],
             "status": datapoint["status"],
