@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-sudo pip3.10 install -r requirements.txt
+sudo pip3 install -r requirements.txt
 
 sudo cp install/services/*.service /lib/systemd/system/
 mkdir /usr/share/Tidepool
