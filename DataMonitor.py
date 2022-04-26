@@ -1,6 +1,6 @@
 import time
 import sys
-from datetime import datetime
+import datetime
 
 import pymongo
 
@@ -68,7 +68,7 @@ class DataMonitor:
     def log_profile(self, profile):
         latest = self.stats_db['latest']
         historical = self.stats_db['historical']
-        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         for key, value in profile.items():
             stats = {'instrument': key,
                      'data_rate': value,
