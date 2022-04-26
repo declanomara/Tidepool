@@ -32,15 +32,20 @@ class API:
 
         r = requests.get(endpoint, headers=headers)
 
-        if 'errorMessage' in r.json():
-            return False
+        if 'errorMessage' in r.json().keys():
+            return r.json()['errorMessage']
 
-        accounts = []
-        for account in r.json()['accounts']:
-            r = requests.get(f'{endpoint}/{account["id"]}', headers=headers)
-            accounts.append(r.json()['account'])
+        try:
+            accounts = []
+            for account in r.json()['accounts']:
+                r = requests.get(f'{endpoint}/{account["id"]}', headers=headers)
+                accounts.append(r.json()['account'])
 
-        return accounts
+            return accounts
+
+        except KeyError:
+            print(r.json())
+            raise
 
     def get_account(self, alias):
         if self.last_refresh < (time.time() - API.REFRESH_INTERVAL):

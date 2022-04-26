@@ -1,0 +1,9 @@
+[Unit]
+Description=Data Gatherer
+
+[Service]
+Type=simple
+ExecStart=/usr/share/Tidepool/install/restart_datagatherer.sh
+
+[Install]
+WantedBy=multi-user.target

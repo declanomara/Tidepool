@@ -322,6 +322,8 @@ def main():
 
     api = OANDA.API(token, live=False)
     account = api.get_account(alias)
+    if not account:
+        print('Error connecting to ')
     instruments = api.get_instruments(alias)
 
     api_config = {

@@ -1,0 +1,9 @@
+[Unit]
+Description=Data Monitor
+
+[Service]
+Type=simple
+ExecStart=/usr/share/Tidepool/install/restart_datamonitor.sh
+
+[Install]
+WantedBy=multi-user.target
