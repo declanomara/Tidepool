@@ -1,18 +1,129 @@
-import sys
 import time
 import pymongo
 import queue
 from dateutil import parser
-from helpers import OANDA, load_config, seconds_to_human
+from helpers import OANDA, load_config, seconds_to_human, ignore_keyboard_interrupt, moving_average, create_logger
 from multiprocessing import Process, Manager
+
+
+class AutoscalingGroup:
+    def __init__(self, target, args, min_process_count):
+        self.target = target
+        self.args = args
+        self.min_process_count = min_process_count
+
+        self.processes = []
+
+    def refresh_procs(self):
+        for _ in range(self.proc_count()):
+            self._downscale()
+            self._upscale()
+
+    def _create_proc(self):
+        process = Process(target=self.target, args=self.args)
+        process.daemon = True
+        return process
+
+    def stop(self):
+        while self.proc_count() > 0:
+            self._downscale()
+
+    def start(self):
+        for _ in range(self.min_process_count):
+            process = self._create_proc()
+            self.processes.append(process)
+
+        for process in self.processes:
+            process.start()
+
+    def proc_count(self):
+        return len(self.processes)
+
+    def _upscale(self):
+        new_proc = self._create_proc()
+        new_proc.start()
+        self.processes.append(new_proc)
+
+    def _downscale(self):
+        downscale_process = self.processes.pop(0)
+        downscale_process.terminate()
+        downscale_process.join()
+
+    def _autoscale_minimum(self):
+        dead = [process for process in self.processes if not process.is_alive()]
+
+        for process in dead:
+            self.processes.remove(process)
+
+        while len(self.processes) < self.min_process_count:
+            # self.logger.warning('Missing process, creating new process.')
+            self._upscale()
+
+    def autoscale(self):
+        self._autoscale_minimum()
+
+
+class LoadBalancer(AutoscalingGroup):
+    def __init__(
+        self,
+        target,
+        args,
+        min_process_count,
+        max_process_count,
+        load_queue,
+        max_queue_size,
+    ):
+        super().__init__(target, args, min_process_count)
+
+        self.args = (load_queue, *args)
+        self.load_queue = load_queue
+        self.max_process_count = max_process_count
+        self.max_queue_size = max_queue_size
+
+        self._previous_queue_size = 0
+        self.queue_average = 0
+        self._autoscale_count = 0
+
+    def _load_balance(self):
+        current_queue_size = self.load_queue.qsize()
+        queue_growth = (current_queue_size - self._previous_queue_size) > 0
+
+        exceeded_max_queue = current_queue_size > self.max_queue_size
+
+        if exceeded_max_queue and (self.proc_count() < self.max_process_count):
+            # self.logger.debug("Max queue size exceeded.")
+            self._upscale()
+
+        if (
+            not exceeded_max_queue
+            and not queue_growth
+            and self.proc_count() > self.min_process_count
+        ):
+            self._downscale()
+
+    def _telemetry(self):
+        current_queue_size = self.load_queue.qsize()
+        self._previous_queue_size = current_queue_size
+        self.queue_average = moving_average(
+            self.queue_average, current_queue_size, self._autoscale_count
+        )
+        self._autoscale_count += 1
+
+    def autoscale(self):
+        self._autoscale_minimum()
+        self._load_balance()
+        self._telemetry()
 
 
 class DataGatherer:
     # Process number limits
-    RECORDING_PROCESS_MIN = 1
-    RECORDING_PROCESS_MAX = 64
-    GATHERING_PROCESS_COUNT = 2
-    PROCESSING_PROCESS_COUNT = 1
+    GATHERING_PROCESS_COUNT_MIN = 2
+
+    RECORDING_PROCESS_COUNT_MIN = 1
+    RECORDING_PROCESS_COUNT_MAX = 64
+
+    PROCESSING_PROCESS_COUNT_MIN = 1
+    PROCESSING_PROCESS_COUNT_MAX = 10
 
     # Periodic action intervals
     TICK_INTERVAL = 0.01
@@ -26,10 +137,6 @@ class DataGatherer:
 
     def __init__(self, db_string: str, api_config: dict):
         self.db_string = db_string
-        self.gathering_processes = []
-        self.recording_processes = []
-        self.processing_processes = []
-
         self.logger = create_logger()
 
         self.manager = Manager()
@@ -40,37 +147,27 @@ class DataGatherer:
         for key, value in api_config.items():
             self.api_config[key] = value
 
-        self._previous_queue_sizes = {
-            'unprocessed': 0,
-            'unsaved': 0
-        }
-        self._queue_averages = {
-            'unprocessed': 0,
-            'unsaved': 0
-        }
-        self._autoscale_count = 0
-
-    def _create_recording_process(self):
-        recording_process = Process(
-            target=self.record_data, args=(self.db_string, self.unsaved_data)
+        self.gatherers = AutoscalingGroup(
+            self.gather_data, (self.api_config, self.unprocessed_data), 2
         )
-        recording_process.daemon = True
-        return recording_process
 
-    def _create_processing_process(self):
-        processing_process = Process(
-            target=self.process_data,
-            args=(self.latest_data, self.unprocessed_data, self.unsaved_data),
+        self.processors = LoadBalancer(
+            self.process_data,
+            (self.latest_data, self.unsaved_data),
+            DataGatherer.PROCESSING_PROCESS_COUNT_MIN,
+            DataGatherer.PROCESSING_PROCESS_COUNT_MAX,
+            self.unprocessed_data,
+            DataGatherer.MAX_QUEUE_SIZE,
         )
-        processing_process.daemon = True
-        return processing_process
 
-    def _create_gathering_process(self):
-        gathering_process = Process(
-            target=self.gather_data, args=(self.api_config, self.unprocessed_data)
+        self.recorders = LoadBalancer(
+            self.record_data,
+            (self.db_string,),
+            DataGatherer.RECORDING_PROCESS_COUNT_MIN,
+            DataGatherer.RECORDING_PROCESS_COUNT_MAX,
+            self.unsaved_data,
+            DataGatherer.MAX_QUEUE_SIZE,
         )
-        gathering_process.daemon = True
-        return gathering_process
 
     @staticmethod
     def process_datapoint(datapoint):
@@ -86,7 +183,8 @@ class DataGatherer:
         return {"dest": datapoint["instrument"], "data": processed_datapoint}
 
     @staticmethod
-    def process_data(latest_data, unprocessed_queue, unsaved_queue):
+    @ignore_keyboard_interrupt
+    def process_data(unprocessed_queue, latest_data, unsaved_queue):
         logger = create_logger()
         while True:
             try:
@@ -112,6 +210,7 @@ class DataGatherer:
                 logger.debug("Unprocessed queue is empty.")
 
     @staticmethod
+    @ignore_keyboard_interrupt
     def gather_data(api_config, unprocessed_queue):
         logger = create_logger()
         token = api_config["token"]
@@ -123,10 +222,11 @@ class DataGatherer:
         for datapoint in data:
             unprocessed_queue.put(datapoint)
 
-        logger.critical('Data stream closed - terminating process.')
+        logger.critical("Data stream closed - terminating process.")
 
     @staticmethod
-    def record_data(db_string, unsaved_queue):
+    @ignore_keyboard_interrupt
+    def record_data(unsaved_queue, db_string):
         logger = create_logger()
         client = pymongo.MongoClient(db_string)
         tidepooldb = client["tidepool"]
@@ -148,100 +248,15 @@ class DataGatherer:
             except queue.Empty:
                 logger.debug("Unsaved queue is empty.")
 
-    def refresh_data_stream(self):
-        self.logger.warning('Creating new gathering process and killing old one...')
-        gathering_process = self._create_gathering_process()
-        gathering_process.start()
-        self.gathering_processes.append(gathering_process)
-        old_process = self.gathering_processes.pop(0)
-        old_process.terminate()
-        old_process.join()
-
-    def _autoscale_gathering_processes(self):
-        dead = [process for process in self.gathering_processes if not process.is_alive()]
-
-        for process in dead:
-            self.gathering_processes.remove(process)
-
-        while len(self.gathering_processes) < DataGatherer.GATHERING_PROCESS_COUNT:
-            self.logger.warning('Missing gathering process, creating new process.')
-            new_proc = self._create_gathering_process()
-            new_proc.start()
-            self.gathering_processes.append(new_proc)
-
-    def _downscale(self):
-        self.logger.info("Terminating recording process to downscale.")
-        downscale_process = self.recording_processes.pop(0)
-        downscale_process.terminate()
-        downscale_process.join()
-
-    def _upscale(self):
-        self.logger.info("Creating new recording process to handle load.")
-        recording_process = self._create_recording_process()
-        self.recording_processes.append(recording_process)
-        self.recording_processes[-1].start()
-
-    def _autoscale_recording_processes(self):
-        unsaved_queue_size = self.unsaved_data.qsize()
-        unprocessed_queue_size = self.unprocessed_data.qsize()
-        queue_growth = (unsaved_queue_size - self._previous_queue_sizes['unsaved']) > 0
-
-        exceeded_max_queue = unsaved_queue_size > DataGatherer.MAX_QUEUE_SIZE
-
-        if (
-                exceeded_max_queue
-                and len(self.recording_processes) < DataGatherer.RECORDING_PROCESS_MAX
-        ):
-            self.logger.debug("Max queue size exceeded.")
-            self._upscale()
-
-        if (
-                not exceeded_max_queue
-                and not queue_growth
-                and len(self.recording_processes) > DataGatherer.RECORDING_PROCESS_MIN
-        ):
-            self._downscale()
-
-        self._previous_queue_sizes['unsaved'] = unsaved_queue_size
-        self._previous_queue_sizes['unprocessed'] = unprocessed_queue_size
-
     def autoscale(self):
-        self._autoscale_recording_processes()
-        self._autoscale_gathering_processes()
-        self._telemetry()
-
-    def _telemetry(self):
-        unsaved_queue_size = self.unsaved_data.qsize()
-        unprocessed_queue_size = self.unprocessed_data.qsize()
-
-        self._queue_averages['unsaved'] = self._calculate_moving_average(self._queue_averages['unsaved'], unsaved_queue_size, self._autoscale_count)
-        self._queue_averages['unprocessed'] = self._calculate_moving_average(self._queue_averages['unprocessed'], unprocessed_queue_size, self._autoscale_count)
-        self._autoscale_count += 1
-
-    def _calculate_moving_average(self, previous, new, count):
-        return previous * (count/(count+1)) + new * (1/(count+1))
+        self.gatherers.autoscale()
+        self.processors.autoscale()
+        self.recorders.autoscale()
 
     def run(self):
-        for _ in range(DataGatherer.GATHERING_PROCESS_COUNT):
-            gathering_process = self._create_gathering_process()
-            self.gathering_processes.append(gathering_process)
-
-        for _ in range(DataGatherer.PROCESSING_PROCESS_COUNT):
-            processing_process = self._create_processing_process()
-            self.processing_processes.append(processing_process)
-
-        for _ in range(DataGatherer.RECORDING_PROCESS_MIN):
-            recording_process = self._create_recording_process()
-            self.recording_processes.append(recording_process)
-
-        for process in self.recording_processes:
-            process.start()
-
-        for process in self.processing_processes:
-            process.start()
-
-        for process in self.gathering_processes:
-            process.start()
+        self.gatherers.start()
+        self.processors.start()
+        self.recorders.start()
 
         tick_count = 1
         tick_time = 0
@@ -249,16 +264,24 @@ class DataGatherer:
             tick_start = time.time()
             uptime = tick_count * DataGatherer.TICK_INTERVAL
 
+            gathering_proc_count = self.gatherers.proc_count()
+            processing_proc_count = self.processors.proc_count()
+            recording_proc_count = self.recorders.proc_count()
+
             if uptime % DataGatherer.AUTOSCALE_INTERVAL == 0:
                 self.autoscale()
 
             if uptime % DataGatherer.STATUS_INTERVAL == 0:
-                proc_count_message = f'# Subprocesses: [Gathering: {len(self.gathering_processes)} | ' \
-                                     f'Processing: {len(self.processing_processes)} | ' \
-                                     f'Recording: {len(self.recording_processes)}]'
-                queue_size_message = f"Queue Sizes (current | avg): " \
-                                     f"[Unprocessed: ({self.unprocessed_data.qsize()} | {self._queue_averages['unprocessed']:.2f}) | " \
-                                     f"Unsaved: ({self.unsaved_data.qsize()} | {self._queue_averages['unsaved']:.2f})]"
+                proc_count_message = (
+                    f"# Subprocesses: [Gathering: {gathering_proc_count} | "
+                    f"Processing: {processing_proc_count} | "
+                    f"Recording: {recording_proc_count}]"
+                )
+                queue_size_message = (
+                    f"Queue Sizes (current | avg): "
+                    f"[Unprocessed: ({self.unprocessed_data.qsize()} | {self.processors.queue_average:.2f}) | "
+                    f"Unsaved: ({self.unsaved_data.qsize()} | {self.recorders.queue_average:.2f})]"
+                )
                 timing_message = f"Timing: [Uptime: {seconds_to_human(uptime)} | Previous Tick Time: {tick_time:0.3e}]"
 
                 self.logger.warning(proc_count_message)
@@ -266,7 +289,7 @@ class DataGatherer:
                 self.logger.warning(timing_message)
 
             if uptime % DataGatherer.DATA_REFRESH_INTERVAL == 0:
-                self.refresh_data_stream()
+                self.gatherers.refresh_procs()
 
             tick_time = time.time() - tick_start
             sleep_time = DataGatherer.TICK_INTERVAL - tick_time
@@ -275,41 +298,9 @@ class DataGatherer:
             tick_count += 1
 
     def stop(self):
-        for process in self.gathering_processes:
-            process.terminate()
-            process.join()
-
-        for process in self.processing_processes:
-            process.terminate()
-            process.join()
-
-        for process in self.gathering_processes:
-            process.terminate()
-            process.join()
-
-
-def create_logger():
-    import multiprocessing, logging
-
-    logger = multiprocessing.get_logger()
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        "[%(asctime)s| %(levelname)s| %(processName)s] %(message)s"
-    )
-    handler = logging.FileHandler("logs/latest.log")
-    handler.setFormatter(formatter)
-
-    if len(logger.handlers) < 1:
-        logger.addHandler(handler)
-
-    out_handler = logging.StreamHandler(sys.stdout)
-    out_handler.setFormatter(formatter)
-    out_handler.setLevel(logging.WARNING)
-
-    if len(logger.handlers) < 2:
-        logger.addHandler(out_handler)
-
-    return logger
+        self.gatherers.stop()
+        self.processors.stop()
+        self.recorders.stop()
 
 
 def main():
@@ -324,7 +315,7 @@ def main():
     api = OANDA.API(token, live=False)
     account = api.get_account(alias)
     if not account:
-        print('Error connecting to ')
+        print("Error connecting to ")
     instruments = api.get_instruments(alias)
 
     api_config = {
@@ -341,7 +332,7 @@ def main():
     except KeyboardInterrupt:
         logger.critical("KeyboardInterrupt, stopping data collection.")
         dg.stop()
-        raise
+        quit(0)
 
 
 if __name__ == "__main__":

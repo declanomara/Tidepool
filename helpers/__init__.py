@@ -1,6 +1,10 @@
 import configparser
+import logging
+import multiprocessing
+import sys
 
 from . import OANDA
+from functools import wraps
 
 
 def load_config(file='cfg.ini'):
@@ -40,3 +44,39 @@ def seconds_to_human(s):
     times = {'w': w, 'd': d, 'h': h, 'm': m, 's': s}
     parts = [f'{val}{key}' for key, val in times.items() if val > 0]
     return ' '.join(parts)
+
+
+def ignore_keyboard_interrupt(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            func(*args, **kwargs)
+
+        except KeyboardInterrupt:
+            return
+    return wrapper
+
+
+def moving_average(previous, new, count):
+    return previous * (count / (count + 1)) + new * (1 / (count + 1))
+
+def create_logger():
+    logger = multiprocessing.get_logger()
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        "[%(asctime)s| %(levelname)s| %(processName)s] %(message)s"
+    )
+    handler = logging.FileHandler("logs/latest.log")
+    handler.setFormatter(formatter)
+
+    if len(logger.handlers) < 1:
+        logger.addHandler(handler)
+
+    out_handler = logging.StreamHandler(sys.stdout)
+    out_handler.setFormatter(formatter)
+    out_handler.setLevel(logging.WARNING)
+
+    if len(logger.handlers) < 2:
+        logger.addHandler(out_handler)
+
+    return logger
