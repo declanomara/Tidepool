@@ -32,5 +32,5 @@ Installation is mostly an automated process, the install process was designed to
 2. Clone repo and run [install/install.sh](install/install.sh)
 3. Ensure success using `systemctl status datagatherer` and `systemctl status datamonitor`
 
-## Planned updates
+## Planned Updates
 Located in [todo.md](todo.md)

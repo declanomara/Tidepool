@@ -7,17 +7,22 @@ from . import OANDA
 from functools import wraps
 
 
-def load_config(file='cfg.ini'):
+def load_config(file: str = "cfg.ini") -> dict:
+    """
+    :param file: Path to a file containing config in .ini format.
+    :return: A dictionary containing all config variables.
+    :rtype: dict
+    """
     parser = configparser.ConfigParser()
     parser.read(file)
 
     cfg = {
-        'token': parser['DataGatherer']['token'],
-        'alias': parser['DataGatherer']['alias'],
-        'db_address': parser['DataGatherer']['db_address'],
-        'db_username': parser['DataGatherer']['db_username'],
-        'db_password': parser['DataGatherer']['db_password'],
-        'db_string': parser['DataGatherer']['db_string']
+        "token": parser["DataGatherer"]["token"],
+        "alias": parser["DataGatherer"]["alias"],
+        "db_address": parser["DataGatherer"]["db_address"],
+        "db_username": parser["DataGatherer"]["db_username"],
+        "db_password": parser["DataGatherer"]["db_password"],
+        "db_string": parser["DataGatherer"]["db_string"],
     }
 
     return cfg
@@ -25,7 +30,7 @@ def load_config(file='cfg.ini'):
 
 def seconds_to_human(s):
     if s == 0:
-        return '0s'
+        return "0s"
 
     M = 60
     H = M * 60
@@ -41,9 +46,9 @@ def seconds_to_human(s):
     m = s // M
     s = s - (m * M)
 
-    times = {'w': w, 'd': d, 'h': h, 'm': m, 's': s}
-    parts = [f'{val}{key}' for key, val in times.items() if val > 0]
-    return ' '.join(parts)
+    times = {"w": w, "d": d, "h": h, "m": m, "s": s}
+    parts = [f"{val}{key}" for key, val in times.items() if val > 0]
+    return " ".join(parts)
 
 
 def ignore_keyboard_interrupt(func):
@@ -54,11 +59,13 @@ def ignore_keyboard_interrupt(func):
 
         except KeyboardInterrupt:
             return
+
     return wrapper
 
 
 def moving_average(previous, new, count):
     return previous * (count / (count + 1)) + new * (1 / (count + 1))
+
 
 def create_logger():
     logger = multiprocessing.get_logger()
