@@ -1,118 +1,18 @@
 import time
 import pymongo
 import queue
+
 from dateutil import parser
-from helpers import OANDA, load_config, seconds_to_human, ignore_keyboard_interrupt, moving_average, create_logger
-from multiprocessing import Process, Manager
-
-
-class AutoscalingGroup:
-    def __init__(self, target, args, min_process_count):
-        self.target = target
-        self.args = args
-        self.min_process_count = min_process_count
-
-        self.processes = []
-
-    def refresh_procs(self):
-        for _ in range(self.proc_count()):
-            self._downscale()
-            self._upscale()
-
-    def _create_proc(self):
-        process = Process(target=self.target, args=self.args)
-        process.daemon = True
-        return process
-
-    def stop(self):
-        while self.proc_count() > 0:
-            self._downscale()
-
-    def start(self):
-        for _ in range(self.min_process_count):
-            process = self._create_proc()
-            self.processes.append(process)
-
-        for process in self.processes:
-            process.start()
-
-    def proc_count(self):
-        return len(self.processes)
-
-    def _upscale(self):
-        new_proc = self._create_proc()
-        new_proc.start()
-        self.processes.append(new_proc)
-
-    def _downscale(self):
-        downscale_process = self.processes.pop(0)
-        downscale_process.terminate()
-        downscale_process.join()
-
-    def _autoscale_minimum(self):
-        dead = [process for process in self.processes if not process.is_alive()]
-
-        for process in dead:
-            self.processes.remove(process)
-
-        while len(self.processes) < self.min_process_count:
-            # self.logger.warning('Missing process, creating new process.')
-            self._upscale()
-
-    def autoscale(self):
-        self._autoscale_minimum()
-
-
-class LoadBalancer(AutoscalingGroup):
-    def __init__(
-        self,
-        target,
-        args,
-        min_process_count,
-        max_process_count,
-        load_queue,
-        max_queue_size,
-    ):
-        super().__init__(target, args, min_process_count)
-
-        self.args = (load_queue, *args)
-        self.load_queue = load_queue
-        self.max_process_count = max_process_count
-        self.max_queue_size = max_queue_size
-
-        self._previous_queue_size = 0
-        self.queue_average = 0
-        self._autoscale_count = 0
-
-    def _load_balance(self):
-        current_queue_size = self.load_queue.qsize()
-        queue_growth = (current_queue_size - self._previous_queue_size) > 0
-
-        exceeded_max_queue = current_queue_size > self.max_queue_size
-
-        if exceeded_max_queue and (self.proc_count() < self.max_process_count):
-            # self.logger.debug("Max queue size exceeded.")
-            self._upscale()
-
-        if (
-            not exceeded_max_queue
-            and not queue_growth
-            and self.proc_count() > self.min_process_count
-        ):
-            self._downscale()
-
-    def _telemetry(self):
-        current_queue_size = self.load_queue.qsize()
-        self._previous_queue_size = current_queue_size
-        self.queue_average = moving_average(
-            self.queue_average, current_queue_size, self._autoscale_count
-        )
-        self._autoscale_count += 1
-
-    def autoscale(self):
-        self._autoscale_minimum()
-        self._load_balance()
-        self._telemetry()
+from queue import Queue
+from helpers import OANDA
+from helpers.misc import (
+    load_config,
+    seconds_to_human,
+    ignore_keyboard_interrupt,
+    create_logger,
+)
+from helpers.balancing import LoadBalancer, AutoscalingGroup
+from multiprocessing import Manager
 
 
 class DataGatherer:
@@ -135,7 +35,12 @@ class DataGatherer:
     MAX_QUEUE_SIZE = 10
     QUEUE_TIMEOUT = 0.1
 
-    def __init__(self, db_string: str, api_config: dict):
+    def __init__(self, db_string: str, api_config: dict) -> None:
+        """
+        :param db_string: MongoDB database connection string
+        :param api_config: API config dictionary
+        :rtype: None
+        """
         self.db_string = db_string
         self.logger = create_logger()
 
@@ -170,7 +75,13 @@ class DataGatherer:
         )
 
     @staticmethod
-    def process_datapoint(datapoint):
+    @ignore_keyboard_interrupt
+    def process_datapoint(datapoint: dict) -> dict:
+        """
+        :param datapoint: Raw OANDA datapoint in dictionary format
+        :return: Returns a datapoint formatted for database storage
+        :rtype: dict
+        """
         processed_datapoint = {
             "time": parser.parse(datapoint["time"]),
             "bid": datapoint["closeoutBid"],
@@ -184,7 +95,13 @@ class DataGatherer:
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def process_data(unprocessed_queue, latest_data, unsaved_queue):
+    def process_data(unprocessed_queue: Queue, latest_data: list, unsaved_queue: Queue) -> None:
+        """
+        :param unprocessed_queue: Queue containing unprocessed data points
+        :param latest_data: List of recently processed data points for removing duplicates
+        :param unsaved_queue: Queue of unsaved data points (used by saving processes)
+        :rtype: None
+        """
         logger = create_logger()
         while True:
             try:
@@ -211,7 +128,12 @@ class DataGatherer:
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def gather_data(api_config, unprocessed_queue):
+    def gather_data(api_config: dict, unprocessed_queue: Queue) -> None:
+        """
+        :param api_config: API config dictionary
+        :param unprocessed_queue: Queue for unprocessed data points
+        :rtype: None
+        """
         logger = create_logger()
         token = api_config["token"]
         id = api_config["id"]
@@ -226,7 +148,12 @@ class DataGatherer:
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def record_data(unsaved_queue, db_string):
+    def record_data(unsaved_queue: Queue, db_string: str) -> None:
+        """
+        :param unsaved_queue: Queue containing unsaved datapoints
+        :param db_string: MongoDB connection string
+        :rtype: None
+        """
         logger = create_logger()
         client = pymongo.MongoClient(db_string)
         tidepooldb = client["tidepool"]
@@ -248,12 +175,18 @@ class DataGatherer:
             except queue.Empty:
                 logger.debug("Unsaved queue is empty.")
 
-    def autoscale(self):
+    def autoscale(self) -> None:
+        """
+        :rtype: None
+        """
         self.gatherers.autoscale()
         self.processors.autoscale()
         self.recorders.autoscale()
 
-    def run(self):
+    def run(self) -> None:
+        """
+        :rtype: None
+        """
         self.gatherers.start()
         self.processors.start()
         self.recorders.start()
@@ -297,13 +230,19 @@ class DataGatherer:
             time.sleep(sleep_time)
             tick_count += 1
 
-    def stop(self):
+    def stop(self) -> None:
+        """
+        :rtype: None
+        """
         self.gatherers.stop()
         self.processors.stop()
         self.recorders.stop()
 
 
-def main():
+def main() -> None:
+    """
+    :rtype: None
+    """
     logger = create_logger()
     logger.info("Starting data collection.")
 
@@ -311,8 +250,9 @@ def main():
     token = cfg["token"]
     alias = cfg["alias"]
     db_string = cfg["db_string"]
+    live = cfg["live"]
 
-    api = OANDA.API(token, live=False)
+    api = OANDA.API(token, live=live)
     account = api.get_account(alias)
     if not account:
         print("Error connecting to ")

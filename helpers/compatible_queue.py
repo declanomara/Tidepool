@@ -9,7 +9,7 @@ import multiprocessing
 
 
 class SharedCounter(object):
-    """ A synchronized shared counter.
+    """A synchronized shared counter.
     The locking done by multiprocessing.Value ensures that only a single
     process or thread may read or write the in-memory ctypes object. However,
     in order to do n += 1, Python performs a read followed by a write, so a
@@ -21,21 +21,21 @@ class SharedCounter(object):
     """
 
     def __init__(self, n=0):
-        self.count = multiprocessing.Value('i', n)
+        self.count = multiprocessing.Value("i", n)
 
     def increment(self, n=1):
-        """ Increment the counter by n (default = 1) """
+        """Increment the counter by n (default = 1)"""
         with self.count.get_lock():
             self.count.value += n
 
     @property
     def value(self):
-        """ Return the value of the counter """
+        """Return the value of the counter"""
         return self.count.value
 
 
 class CompatibleQueue(Queue):
-    """ A portable implementation of multiprocessing.Queue.
+    """A portable implementation of multiprocessing.Queue.
     Because of multithreading / multiprocessing semantics, Queue.qsize() may
     raise the NotImplementedError exception on Unix platforms like Mac OS X
     where sem_getvalue() is not implemented. This subclass addresses this
@@ -69,13 +69,13 @@ class CompatibleQueue(Queue):
         self.size is a SharedCounter instance. It is itself serializable.
         """
         return {
-            'parent_state': super().__getstate__(),
-            'size': self.size,
+            "parent_state": super().__getstate__(),
+            "size": self.size,
         }
 
     def __setstate__(self, state):
-        super().__setstate__(state['parent_state'])
-        self.size = state['size']
+        super().__setstate__(state["parent_state"])
+        self.size = state["size"]
 
     def put(self, *args, **kwargs):
         super().put(*args, **kwargs)
@@ -87,9 +87,9 @@ class CompatibleQueue(Queue):
         return item
 
     def qsize(self):
-        """ Reliable implementation of multiprocessing.Queue.qsize() """
+        """Reliable implementation of multiprocessing.Queue.qsize()"""
         return self.size.value
 
     def empty(self):
-        """ Reliable implementation of multiprocessing.Queue.empty() """
+        """Reliable implementation of multiprocessing.Queue.empty()"""
         return not self.qsize()
