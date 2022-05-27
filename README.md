@@ -5,7 +5,7 @@
 
 
 # Tidepool Core
-This project is the core behind the Tidepool finance data collection. It contains two main componenets, the data gatherer ('DataGatherer.py') and the data monitor ('DataMonitor.py'). 
+This project is the core behind the Tidepool finance data collection. It contains two main componenets, the data gatherer  and the data monitor. 
 
 ## Data Gatherer
 
