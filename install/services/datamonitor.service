@@ -2,11 +2,14 @@
 Description=Data Monitor
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=500
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart=/usr/share/Tidepool/install/restart_datamonitor.sh
-Restart=always
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target

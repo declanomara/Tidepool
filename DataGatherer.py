@@ -12,6 +12,7 @@ from helpers.misc import (
     ignore_keyboard_interrupt,
     create_logger,
 )
+from helpers.ipc import expose_telemetry, telemetry_format
 from helpers.balancing import LoadBalancer, AutoscalingGroup
 from multiprocessing import Manager
 
@@ -45,11 +46,12 @@ class DataGatherer:
     PROCESSING_PROCESS_COUNT_MIN = 1
     PROCESSING_PROCESS_COUNT_MAX = 10
 
-    # Periodic action intervals
+    # Periodic action intervals (perform action every n seconds)
     TICK_INTERVAL = 0.01
     DATA_REFRESH_INTERVAL = 60 * 10
     STATUS_INTERVAL = 5
     AUTOSCALE_INTERVAL = 0.25
+    UPDATE_TELEMETRY_INTERVAL = 5
 
     # Queue limits
     MAX_QUEUE_SIZE = 10
@@ -68,12 +70,19 @@ class DataGatherer:
         self.latest_data = self.manager.list()
         self.unsaved_data = self.manager.Queue()
         self.unprocessed_data = self.manager.Queue()
+
+        self.public_telemetry = self.manager.dict(telemetry_format)
+
         self.api_config = self.manager.dict()
         for key, value in api_config.items():
             self.api_config[key] = value
 
+        self.ipc = AutoscalingGroup(expose_telemetry, (self.public_telemetry,), 1)
+
         self.gatherers = AutoscalingGroup(
-            self.gather_data, (self.api_config, self.unprocessed_data), 2
+            self.gather_data,
+            (self.api_config, self.unprocessed_data),
+            DataGatherer.GATHERING_PROCESS_COUNT_MIN,
         )
 
         self.processors = LoadBalancer(
@@ -96,7 +105,38 @@ class DataGatherer:
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def process_data(unprocessed_queue: Queue, latest_data: list, unsaved_queue: Queue) -> None:
+    def gather_data(
+        api_config: dict, unprocessed_queue: Queue, telemetry: dict = None
+    ) -> None:
+        """
+        :param api_config: API config dictionary
+        :param unprocessed_queue: Queue for unprocessed data points
+        :rtype: None
+        """
+        logger = create_logger()
+        token = api_config["token"]
+        id = api_config["id"]
+        instruments = api_config["instruments"]
+        url = api_config["url"]
+
+        data = OANDA.stream_prices(token, id, instruments, url)
+        for datapoint in data:
+            unprocessed_queue.put(datapoint)
+
+            if telemetry is not None:
+                # do telemetry...
+                telemetry["action_count"] += 1
+
+        logger.critical("Data stream closed - terminating process.")
+
+    @staticmethod
+    @ignore_keyboard_interrupt
+    def process_data(
+        unprocessed_queue: Queue,
+        latest_data: list,
+        unsaved_queue: Queue,
+        telemetry: dict = None,
+    ) -> None:
         """
         :param unprocessed_queue: Queue containing unprocessed data points
         :param latest_data: List of recently processed data points for removing duplicates
@@ -117,7 +157,7 @@ class DataGatherer:
                 if len(latest_data) > 100:
                     latest_data.pop(0)
 
-                logger.info(f'Processing datapoint: {datapoint}')
+                logger.info(f"Processing datapoint: {datapoint}")
                 # Save every datapoint
                 to_queue = {"dest": "raw", "data": datapoint}
                 unsaved_queue.put(to_queue)
@@ -127,32 +167,17 @@ class DataGatherer:
                     to_queue = process_datapoint(datapoint)
                     unsaved_queue.put(to_queue)
 
+                if telemetry is not None:
+                    telemetry["action_count"] += 1
+
             except queue.Empty:
                 logger.debug("Unprocessed queue is empty.")
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def gather_data(api_config: dict, unprocessed_queue: Queue) -> None:
-        """
-        :param api_config: API config dictionary
-        :param unprocessed_queue: Queue for unprocessed data points
-        :rtype: None
-        """
-        logger = create_logger()
-        token = api_config["token"]
-        id = api_config["id"]
-        instruments = api_config["instruments"]
-        url = api_config["url"]
-
-        data = OANDA.stream_prices(token, id, instruments, url)
-        for datapoint in data:
-            unprocessed_queue.put(datapoint)
-
-        logger.critical("Data stream closed - terminating process.")
-
-    @staticmethod
-    @ignore_keyboard_interrupt
-    def record_data(unsaved_queue: Queue, db_string: str) -> None:
+    def record_data(
+        unsaved_queue: Queue, db_string: str, telemetry: dict = None
+    ) -> None:
         """
         :param unsaved_queue: Queue containing unsaved datapoints
         :param db_string: MongoDB connection string
@@ -181,13 +206,81 @@ class DataGatherer:
                     elapsed = (time.time_ns() - start) / 1000
                     logger.info(f"Successfully inserted data point in {elapsed}μs")
 
+                if telemetry is not None:
+                    telemetry["action_count"] += 1
+
             except queue.Empty:
                 logger.debug("Unsaved queue is empty.")
+
+    def calculate_data_rates(self) -> tuple[float, float, float]:
+        total_data_gathered, total_data_processed, total_data_recorded = self.get_data_totals()
+
+        data_gather_rate: float = (
+                                   total_data_gathered - self.public_telemetry["data"]["gatherers"]["total"]
+                           ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
+        data_process_rate: float = (
+                                    total_data_processed - self.public_telemetry["data"]["processors"]["total"]
+                            ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
+        data_record_rate: float = (
+                                   total_data_recorded - self.public_telemetry["data"]["recorders"]["total"]
+                           ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
+
+        return data_gather_rate, data_process_rate, data_record_rate
+
+    def get_data_totals(self) -> tuple[int, int, int]:
+        total_data_gathered = self.gatherers.telemetry["action_count"]
+        total_data_processed = self.processors.telemetry["action_count"]
+        total_data_recorded = self.recorders.telemetry["action_count"]
+
+        return total_data_gathered, total_data_processed, total_data_recorded
+
+    def update_telemetry(self, uptime: float):
+        data_gather_rate, data_process_rate, data_record_rate = self.calculate_data_rates()
+        total_data_gathered, total_data_processed, total_data_recorded = self.get_data_totals()
+
+        public_telemetry = {
+            'data': {
+                'gatherers': {
+                    'total': total_data_gathered,
+                    'rate': data_gather_rate
+                },
+                'processors': {
+                    'total': total_data_processed,
+                    'rate': data_process_rate
+                },
+                'recorders': {
+                    'total': total_data_recorded,
+                    'rate': data_record_rate
+                }
+            },
+            'server': {
+                'proc_counts': {
+                    'gatherers': self.gatherers.proc_count(),
+                    'processors': self.processors.proc_count(),
+                    'recorders': self.recorders.proc_count()
+                },
+                'queues': {
+                    'unprocessed': {
+                        'size': self.unprocessed_data.qsize(),
+                        'average': self.processors.queue_average
+                    },
+                    'unsaved': {
+                        'size': self.unsaved_data.qsize(),
+                        'average': self.recorders.queue_average
+                    }
+                },
+                'uptime': uptime
+
+            }
+        }
+
+        self.public_telemetry.update(public_telemetry)
 
     def autoscale(self) -> None:
         """
         :rtype: None
         """
+        self.ipc.autoscale()
         self.gatherers.autoscale()
         self.processors.autoscale()
         self.recorders.autoscale()
@@ -196,6 +289,7 @@ class DataGatherer:
         """
         :rtype: None
         """
+        self.ipc.start()
         self.gatherers.start()
         self.processors.start()
         self.recorders.start()
@@ -232,6 +326,9 @@ class DataGatherer:
 
             if uptime % DataGatherer.DATA_REFRESH_INTERVAL == 0:
                 self.gatherers.refresh_procs()
+
+            if uptime % DataGatherer.UPDATE_TELEMETRY_INTERVAL == 0:
+                self.update_telemetry(uptime)
 
             tick_time = time.time() - tick_start
             sleep_time = DataGatherer.TICK_INTERVAL - tick_time

@@ -114,3 +114,4 @@ def create_logger() -> logging.Logger:
         logger.addHandler(out_handler)
 
     return logger
+

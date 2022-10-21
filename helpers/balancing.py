@@ -1,5 +1,5 @@
 from .misc import moving_average
-from multiprocessing import Process
+from multiprocessing import Process, Manager
 from queue import Queue
 from typing import Callable
 
@@ -16,6 +16,10 @@ class AutoscalingGroup:
         self.args = args
         self.min_process_count = min_process_count
 
+        self.telemetry = Manager().dict({
+            'action_count': 0
+        })
+
         self.processes = []
 
     def refresh_procs(self) -> None:
@@ -31,7 +35,7 @@ class AutoscalingGroup:
         :return: Returns a multiprocessing Process instance
         :rtype: Process
         """
-        process = Process(target=self.target, args=self.args)
+        process = Process(target=self.target, args=self.args, kwargs={'telemetry': self.telemetry})
         process.daemon = True
         return process
 
