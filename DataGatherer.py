@@ -8,11 +8,31 @@ from helpers import OANDA
 from helpers.misc import (
     load_config,
     seconds_to_human,
+    seconds_to_us,
     ignore_keyboard_interrupt,
     create_logger,
 )
 from helpers.balancing import LoadBalancer, AutoscalingGroup
 from multiprocessing import Manager
+
+
+def process_datapoint(datapoint: dict) -> dict:
+    """
+    :param datapoint: Raw OANDA datapoint in dictionary format
+    :return: Returns a datapoint formatted for database storage
+    :rtype: dict
+    """
+    processed_datapoint = {
+        "time": parser.parse(datapoint["time"]),
+        "bid": datapoint["closeoutBid"],
+        "ask": datapoint["closeoutAsk"],
+        "status": datapoint["status"],
+        "tradeable": datapoint["tradeable"],
+        "instrument": datapoint["instrument"],
+    }
+
+    db_packet = {"dest": datapoint["instrument"], "data": processed_datapoint}
+    return db_packet
 
 
 class DataGatherer:
@@ -76,25 +96,6 @@ class DataGatherer:
 
     @staticmethod
     @ignore_keyboard_interrupt
-    def process_datapoint(datapoint: dict) -> dict:
-        """
-        :param datapoint: Raw OANDA datapoint in dictionary format
-        :return: Returns a datapoint formatted for database storage
-        :rtype: dict
-        """
-        processed_datapoint = {
-            "time": parser.parse(datapoint["time"]),
-            "bid": datapoint["closeoutBid"],
-            "ask": datapoint["closeoutAsk"],
-            "status": datapoint["status"],
-            "tradeable": datapoint["tradeable"],
-            "instrument": datapoint["instrument"],
-        }
-
-        return {"dest": datapoint["instrument"], "data": processed_datapoint}
-
-    @staticmethod
-    @ignore_keyboard_interrupt
     def process_data(unprocessed_queue: Queue, latest_data: list, unsaved_queue: Queue) -> None:
         """
         :param unprocessed_queue: Queue containing unprocessed data points
@@ -116,12 +117,15 @@ class DataGatherer:
                 if len(latest_data) > 100:
                     latest_data.pop(0)
 
+                logger.info(f'Processing datapoint: {datapoint}')
                 # Save every datapoint
-                unsaved_queue.put({"dest": "raw", "data": datapoint})
+                to_queue = {"dest": "raw", "data": datapoint}
+                unsaved_queue.put(to_queue)
 
                 # Save relevant price data in correct database
                 if datapoint["type"] == "PRICE":
-                    unsaved_queue.put(DataGatherer.process_datapoint(datapoint))
+                    to_queue = process_datapoint(datapoint)
+                    unsaved_queue.put(to_queue)
 
             except queue.Empty:
                 logger.debug("Unprocessed queue is empty.")
@@ -162,6 +166,11 @@ class DataGatherer:
         while True:
             try:
                 datapoint = unsaved_queue.get(timeout=DataGatherer.QUEUE_TIMEOUT)
+
+                if datapoint is None:
+                    logger.error("'NoneType' datapoint found in unsaved queue.")
+                    continue
+
                 if datapoint["dest"] == "raw":
                     raw.insert_one(datapoint["data"])
 
@@ -215,7 +224,7 @@ class DataGatherer:
                     f"[Unprocessed: ({self.unprocessed_data.qsize()} | {self.processors.queue_average:.2f}) | "
                     f"Unsaved: ({self.unsaved_data.qsize()} | {self.recorders.queue_average:.2f})]"
                 )
-                timing_message = f"Timing: [Uptime: {seconds_to_human(uptime)} | Previous Tick Time: {tick_time:0.3e}]"
+                timing_message = f"Timing: [Uptime: {seconds_to_human(uptime)} | Previous Tick Time: {seconds_to_us(tick_time)}µs]"
 
                 self.logger.warning(proc_count_message)
                 self.logger.warning(queue_size_message)

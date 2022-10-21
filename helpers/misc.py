@@ -57,12 +57,17 @@ def seconds_to_human(s: float) -> str:
     return " ".join(parts)
 
 
+def seconds_to_us(seconds: float) -> int:
+    return int(seconds * 10 ** 6)
+
+
 def ignore_keyboard_interrupt(func: Callable) -> Callable:
     """
     :param func: Callable object to wrap with KeyboardInterrupt ignore
     :return: Returns callable object func, with additional functionality to ignore KeyboardInterrupt
     :rtype: Callable object that exits cleanly in case of KeyboardInterrupt
     """
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
