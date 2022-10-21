@@ -212,7 +212,7 @@ class DataGatherer:
             except queue.Empty:
                 logger.debug("Unsaved queue is empty.")
 
-    def calculate_data_rates(self) -> tuple[float, float, float]:
+    def calculate_data_rates(self) -> tuple:
         total_data_gathered, total_data_processed, total_data_recorded = self.get_data_totals()
 
         data_gather_rate: float = (
@@ -227,7 +227,7 @@ class DataGatherer:
 
         return data_gather_rate, data_process_rate, data_record_rate
 
-    def get_data_totals(self) -> tuple[int, int, int]:
+    def get_data_totals(self) -> tuple:
         total_data_gathered = self.gatherers.telemetry["action_count"]
         total_data_processed = self.processors.telemetry["action_count"]
         total_data_recorded = self.recorders.telemetry["action_count"]
