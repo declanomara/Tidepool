@@ -96,7 +96,7 @@ def create_logger() -> logging.Logger:
     :rtype: logging.Logger
     """
     logger = multiprocessing.get_logger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
     formatter = logging.Formatter(
         "[%(asctime)s| %(levelname)s| %(processName)s] %(message)s"
     )

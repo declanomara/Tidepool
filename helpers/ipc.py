@@ -1,5 +1,6 @@
 import socket
 import json
+from .misc import create_logger
 
 telemetry_format = {
         'data' : {
@@ -38,16 +39,19 @@ telemetry_format = {
 
 
 def expose_telemetry(exposed_telemetry: dict, telemetry: dict = None) -> None:
-    host = socket.gethostname()
+    logger = create_logger()
+    host = "127.0.0.1"
     port = 65001    # TODO: Auto-assign port to avoid collision with other software
 
     server_socket = socket.socket()
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))  # bind host address and port together
+    logger.info(f"Successfully created socket listening on {host}:{port}")
 
     # Configure how many client the server can listen simultaneously
     server_socket.listen(10)
     while True:
+        logger.info("Waiting for client...")
         conn, address = server_socket.accept()
 
         while True:
@@ -58,6 +62,7 @@ def expose_telemetry(exposed_telemetry: dict, telemetry: dict = None) -> None:
 
             response = json.dumps(exposed_telemetry.copy())  # Must copy as shared dict is not JSON serializable
             conn.send(response.encode('utf-8'))
+            logger.info("Served telemetry data.")
 
         if telemetry is not None:
             telemetry['action_count'] += 1
