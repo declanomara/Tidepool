@@ -12,7 +12,7 @@ from helpers.misc import (
     ignore_keyboard_interrupt,
     create_logger,
 )
-from helpers.ipc import expose_telemetry, telemetry_format
+from helpers.ipc import expose_telemetry, telemetry_format, TelemetryManager
 from helpers.balancing import LoadBalancer, AutoscalingGroup
 from multiprocessing import Manager
 
@@ -71,13 +71,13 @@ class DataGatherer:
         self.unsaved_data = self.manager.Queue()
         self.unprocessed_data = self.manager.Queue()
 
-        self.public_telemetry = self.manager.dict(telemetry_format)
+        self.telemetry_manager = TelemetryManager(self.manager.dict(telemetry_format))
 
         self.api_config = self.manager.dict()
         for key, value in api_config.items():
             self.api_config[key] = value
 
-        self.ipc = AutoscalingGroup(expose_telemetry, (self.public_telemetry,), 1)
+        self.ipc = AutoscalingGroup(expose_telemetry, (self.telemetry_manager.shared_telemetry,), 1)
 
         self.gatherers = AutoscalingGroup(
             self.gather_data,
@@ -167,8 +167,15 @@ class DataGatherer:
                     to_queue = process_datapoint(datapoint)
                     unsaved_queue.put(to_queue)
 
-                if telemetry is not None:
-                    telemetry["action_count"] += 1
+                    if telemetry is not None:
+                        telemetry["action_count"] += 1
+
+                        instrument = to_queue['dest']
+
+                        if instrument in telemetry:
+                            telemetry[instrument] += 1
+                        else:
+                            telemetry[instrument] = 1
 
             except queue.Empty:
                 logger.debug("Unprocessed queue is empty.")
@@ -212,69 +219,18 @@ class DataGatherer:
             except queue.Empty:
                 logger.debug("Unsaved queue is empty.")
 
-    def calculate_data_rates(self) -> tuple:
-        total_data_gathered, total_data_processed, total_data_recorded = self.get_data_totals()
-
-        data_gather_rate: float = (
-                                   total_data_gathered - self.public_telemetry["data"]["gatherers"]["total"]
-                           ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
-        data_process_rate: float = (
-                                    total_data_processed - self.public_telemetry["data"]["processors"]["total"]
-                            ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
-        data_record_rate: float = (
-                                   total_data_recorded - self.public_telemetry["data"]["recorders"]["total"]
-                           ) / DataGatherer.UPDATE_TELEMETRY_INTERVAL
-
-        return data_gather_rate, data_process_rate, data_record_rate
-
-    def get_data_totals(self) -> tuple:
-        total_data_gathered = self.gatherers.telemetry["action_count"]
-        total_data_processed = self.processors.telemetry["action_count"]
-        total_data_recorded = self.recorders.telemetry["action_count"]
-
-        return total_data_gathered, total_data_processed, total_data_recorded
-
     def update_telemetry(self, uptime: float):
-        data_gather_rate, data_process_rate, data_record_rate = self.calculate_data_rates()
-        total_data_gathered, total_data_processed, total_data_recorded = self.get_data_totals()
+        self.telemetry_manager.update_data_stats(
+            self.gatherers, self.processors, self.recorders, DataGatherer.UPDATE_TELEMETRY_INTERVAL
+        )
 
-        public_telemetry = {
-            'data': {
-                'gatherers': {
-                    'total': total_data_gathered,
-                    'rate': data_gather_rate
-                },
-                'processors': {
-                    'total': total_data_processed,
-                    'rate': data_process_rate
-                },
-                'recorders': {
-                    'total': total_data_recorded,
-                    'rate': data_record_rate
-                }
-            },
-            'server': {
-                'proc_counts': {
-                    'gatherers': self.gatherers.proc_count(),
-                    'processors': self.processors.proc_count(),
-                    'recorders': self.recorders.proc_count()
-                },
-                'queues': {
-                    'unprocessed': {
-                        'size': self.unprocessed_data.qsize(),
-                        'average': self.processors.queue_average
-                    },
-                    'unsaved': {
-                        'size': self.unsaved_data.qsize(),
-                        'average': self.recorders.queue_average
-                    }
-                },
-                'uptime': uptime
+        self.telemetry_manager.update_server_stats(
+            self.gatherers, self.processors, self.recorders, self.unsaved_data, self.unprocessed_data, uptime
+        )
 
-            }
-        }
+        self.telemetry_manager.update_instrument_stats(self.processors, DataGatherer.UPDATE_TELEMETRY_INTERVAL)
 
-        self.public_telemetry.update(public_telemetry)
+        self.telemetry_manager.update_shared_telemetry()
 
     def autoscale(self) -> None:
         """
