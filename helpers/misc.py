@@ -4,6 +4,7 @@ import multiprocessing
 import sys
 
 from functools import wraps
+from logging.handlers import RotatingFileHandler
 from typing import Callable, Union
 
 
@@ -100,7 +101,7 @@ def create_logger() -> logging.Logger:
     formatter = logging.Formatter(
         "[%(asctime)s| %(levelname)s| %(processName)s] %(message)s"
     )
-    handler = logging.FileHandler("logs/latest.log")
+    handler = RotatingFileHandler("logs/log.log", mode='a', maxBytes=100_000_000, backupCount=3)
     handler.setFormatter(formatter)
 
     if len(logger.handlers) < 1:
