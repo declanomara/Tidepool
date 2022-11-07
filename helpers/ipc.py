@@ -24,7 +24,7 @@ class TelemetryManager:
 
         self.server_stats = {}
 
-        self.instrument_stats = {}
+        self.datastream_stats = {}
 
     def _get_data_totals(self, gatherers, processors, recorders) -> tuple:
         total_data_gathered = gatherers.telemetry["action_count"]
@@ -90,11 +90,11 @@ class TelemetryManager:
                 continue
 
             rate = 0
-            if instrument in self.instrument_stats:
-                previous = self.instrument_stats[instrument]['count']
+            if instrument in self.datastream_stats:
+                previous = self.datastream_stats[instrument]['count']
                 rate = (count - previous) / interval
 
-            self.instrument_stats[instrument] = {
+            self.datastream_stats[instrument] = {
                 'count': count,
                 'rate': rate
             }
@@ -102,7 +102,7 @@ class TelemetryManager:
     def update_shared_telemetry(self):
         self.shared_telemetry['data'] = self.data_stats
         self.shared_telemetry['server'] = self.server_stats
-        self.shared_telemetry['instruments'] = self.instrument_stats
+        self.shared_telemetry['datastream'] = self.datastream_stats
 
 
 telemetry_format = {

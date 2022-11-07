@@ -35,10 +35,14 @@ else
 fi
 
 # Install python requirements
+echo "Installing python requirements..."
 python3 -m pip install -r requirements.txt
+echo "Done."
 
 # Move services into systemd directory
+echo "Installing systemd services..."
 sudo cp install/services/*.service /lib/systemd/system/
+echo "Done."
 
 # Move program files into correct directory
 if [ -d $INSTALL_DIR ]
@@ -51,20 +55,20 @@ else
 fi
 
 echo "Moving required files to $INSTALL_DIR"
-sudo cp -r ./* /usr/share/Tidepool/
+sudo cp -r ./* $INSTALL_DIR
 
 # Reload and start new services
 
 echo "Reloading systemd..."
 systemctl daemon-reload
-echo "done."
+echo "Done."
 
 echo "Starting Tidepool services..."
 systemctl restart datagatherer.service
 systemctl restart datamonitor.service
-echo "done."
+echo "Done."
 
 echo "Enabling Tidepool services..."
 systemctl enable datagatherer.service
 systemctl enable datamonitor.service
-echo "done."
+echo "Done."
