@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=root
-ExecStart=/usr/bin/sh /usr/local/tidepool/scripts/start_mercury_workers.sh
+ExecStart=/usr/bin/sh /usr/local/tidepool/mercury/start_mercury_workers.sh
 RemainAfterExit=yes
 # Restart=always
 # TimeoutStartSec=10
