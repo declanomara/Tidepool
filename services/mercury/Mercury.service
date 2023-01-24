@@ -1,0 +1,16 @@
+[Unit]
+Description=Manages all Mercury workers
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/sh /usr/local/tidepool/scripts/start_mercury_workers.sh
+RemainAfterExit=yes
+# Restart=always
+# TimeoutStartSec=10
+# RestartSec=10
+
+[Install]
+WantedBy = multi-user.target

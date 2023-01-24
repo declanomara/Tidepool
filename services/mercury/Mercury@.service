@@ -1,0 +1,16 @@
+[Unit]
+Description=Mercury service worker, instance %i
+Requires=Mercury.service
+Before=Mercury.service
+BindsTo=Mercury.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/tidepool/venv/bin/python3 -u /usr/local/tidepool/mercury/Mercury.py -i %i
+
+Restart=always
+TimeoutStartSec=10
+RestartSec=10
+
+[Install]
+WantedBy=Mercury.service
